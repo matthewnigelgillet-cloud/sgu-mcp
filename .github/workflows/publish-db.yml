@@ -1,0 +1,61 @@
+# Build the SGU full-text index in the cloud and publish it as a release asset.
+# This is the single source of the prebuilt archive that everything else consumes:
+#   - npx users run `npm run setup` to download it (no scraping)
+#   - the remote MCP connector downloads it at deploy time
+#   - the static website downloads it at deploy time
+#
+# Runs monthly (gentle on the volunteer wiki) and on demand. After publishing it
+# optionally pings the Render deploy hook so the website refreshes with new data.
+#
+# One-time setup:
+#   - Nothing required for the release itself (uses the built-in GITHUB_TOKEN).
+#   - Optional: add a repo secret RENDER_DEPLOY_HOOK_URL to auto-refresh the site.
+name: Publish prebuilt index
+
+on:
+  schedule:
+    - cron: "0 7 1 * *" # 1st of each month, 07:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # needed to create/update the release
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+
+      - name: Scrape transcripts (resumable, rate-limited)
+        run: npm run fetch
+
+      - name: Build FTS index
+        run: npm run index
+
+      - name: Prepare browser DB (vacuumed, range-ready)
+        run: npm run web
+
+      - name: Publish index to the db-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Vacuumed, single-file DB (web/sgu.db) is the cleanest artifact to ship.
+          cp web/sgu.db sgu.db
+          gzip -k -9 sgu.db   # also publish a compressed copy for faster downloads
+          if gh release view db-latest >/dev/null 2>&1; then
+            gh release upload db-latest sgu.db sgu.db.gz --clobber
+          else
+            gh release create db-latest sgu.db sgu.db.gz \
+              --title "Prebuilt SGU index" \
+              --notes "Auto-published full-text index. Download with \`npm run setup\`." \
+              --latest=false
+          fi
+
+      - name: Refresh the website (optional)
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
+        run: curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"

@@ -1,0 +1,23 @@
+# Build + smoke test on every push / PR.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Type-check / build
+        run: npm run build
+      - name: Smoke test (live SGU sources)
+        run: npm run smoke

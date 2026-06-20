@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Generated artifacts (reproducible via `npm run fetch && npm run index && npm run web`).
+# Commit these instead if you want deploys to skip re-scraping — see README.
+episodes/
+data/
+web/sgu.db
+web/sgu.db-wal
+web/sgu.db-shm
+# web/vendor/ IS committed — the site must be self-contained (same-origin worker).

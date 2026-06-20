@@ -1,0 +1,54 @@
+# Render static site for the SGU Archive.
+# The build DOWNLOADS the prebuilt index (published by the publish-db GitHub
+# Action) and prepares the browser DB from it — no scraping at deploy time, so
+# deploys are fast and gentle on the volunteer wiki. Serving is static — no
+# server, no API key, no per-visitor cost. Search runs in the visitor's browser.
+#
+# Headers ensure the .db is served with byte-range support and never gzipped
+# (range requests over a compressed body break sql.js-httpvfs).
+services:
+  - type: web
+    name: sgu-archive
+    runtime: static
+    buildCommand: npm ci && npm run setup && npm run web
+    staticPublishPath: ./web
+    headers:
+      - path: /sgu.db
+        name: Accept-Ranges
+        value: bytes
+      - path: /sgu.db
+        name: Cache-Control
+        value: public, max-age=86400
+      # Security headers for the HTML/app. The CSP mirrors the <meta> in
+      # index.html; sending it as a real header is stronger (covers responses
+      # the meta tag can't, and can't be stripped by injected markup).
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'"
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+
+  # Remote MCP connector (Streamable HTTP). Optional — deploy this if you want
+  # people to add SGU as a connector in Claude and search with their own account.
+  # It downloads the prebuilt index at build time (no re-scrape) and serves the
+  # same 9 tools over POST /mcp. Set SGU_MCP_TOKEN in the Render dashboard, then
+  # clients send `Authorization: Bearer <token>`.
+  - type: web
+    name: sgu-mcp-connector
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build && (npm run setup || echo "no prebuilt index yet — live wiki tools still work")
+    startCommand: npm run start:http
+    healthCheckPath: /healthz
+    envVars:
+      - key: SGU_MCP_TOKEN
+        sync: false # set this secret in the Render dashboard
+      - key: NODE_VERSION
+        value: "22"

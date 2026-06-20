@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!-- Strict CSP: scripts/workers/wasm same-origin only; the only outbound
+     connection allowed is the visitor's own browser -> Anthropic API (BYOK).
+     This limits the blast radius if anything tried to exfiltrate the API key. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'" />
+<title>SGU Archive — search The Skeptics' Guide to the Universe</title>
+<meta name="description" content="Search every episode transcript of The Skeptics' Guide to the Universe. Count mentions by year, find segments, read the moments — all in your browser." />
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+<header>
+  <h1>The SGU Archive</h1>
+  <p class="tagline">Search every transcript of <em>The Skeptics' Guide to the Universe</em> — <span id="stat-line">loading the archive…</span></p>
+</header>
+
+<main>
+  <form id="search-form" autocomplete="off">
+    <div class="search-row">
+      <input id="q" type="search" placeholder="Search the transcripts — e.g. homeopathy, CRISPR, &quot;cold fusion&quot;" aria-label="Search query" />
+      <select id="year" aria-label="Filter by year"><option value="">All years</option></select>
+      <button type="submit">Search</button>
+    </div>
+    <p class="hint">Tip: use quotes for exact phrases, <code>AND</code>/<code>OR</code> between words, or <code>vaccin*</code> for prefixes.</p>
+  </form>
+
+  <section id="summary" hidden></section>
+
+  <section id="ai-panel" hidden>
+    <details>
+      <summary>🤖 Ask Claude about these results <span class="byok-badge">bring your own API key</span></summary>
+      <div class="ai-body">
+        <p class="ai-note">Your key is stored only in this browser and sent directly to Anthropic — never to this site. Get one at <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
+        <div class="ai-controls">
+          <input id="api-key" type="password" placeholder="sk-ant-…" aria-label="Anthropic API key" />
+          <select id="model" aria-label="Model">
+            <option value="claude-haiku-4-5">Haiku 4.5 — cheapest</option>
+            <option value="claude-sonnet-4-6">Sonnet 4.6 — balanced</option>
+            <option value="claude-opus-4-8">Opus 4.8 — most capable</option>
+          </select>
+        </div>
+        <input id="ai-question" type="text" placeholder="What does the show say about this? (optional — defaults to a summary)" aria-label="Question for Claude" />
+        <button id="ask-btn" type="button">Ask Claude using the top results</button>
+        <div id="ai-answer" hidden></div>
+      </div>
+    </details>
+  </section>
+
+  <section id="results"></section>
+</main>
+
+<footer>
+  <p>Transcripts © their authors, from <a href="https://www.sgutranscripts.org/" target="_blank" rel="noopener">sgutranscripts.org</a> (volunteer-made). Audio from the official <a href="https://www.theskepticsguide.org/" target="_blank" rel="noopener">SGU</a> feed. This is an unofficial fan archive. Search runs entirely in your browser.</p>
+</footer>
+
+<!-- sql.js-httpvfs is a UMD bundle — load as a classic script so it attaches createDbWorker to window -->
+<script src="./vendor/index.js"></script>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

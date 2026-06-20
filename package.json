@@ -1,0 +1,62 @@
+{
+  "name": "sgu-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for The Skeptics' Guide to the Universe (transcripts, episodes, Science or Fiction, news items)",
+  "type": "module",
+  "license": "MIT",
+  "author": "Matt Gillet",
+  "homepage": "https://github.com/matthewnigelgillet-cloud/sgu-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matthewnigelgillet-cloud/sgu-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/matthewnigelgillet-cloud/sgu-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "sgu",
+    "skeptics-guide",
+    "podcast",
+    "transcripts",
+    "full-text-search"
+  ],
+  "bin": {
+    "sgu-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "start:http": "node dist/http.js",
+    "dev:http": "tsx src/http.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "fetch": "tsx scripts/fetch-all.ts",
+    "index": "tsx scripts/build-index.ts",
+    "setup": "tsx scripts/download-db.ts",
+    "web": "tsx scripts/build-web.ts",
+    "web:serve": "node scripts/serve-web.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "fast-xml-parser": "^4.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "playwright-core": "^1.61.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
