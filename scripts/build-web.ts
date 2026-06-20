@@ -23,11 +23,19 @@ async function main() {
   await rm(WEB_DB + "-shm", { force: true });
 
   const db = new DatabaseSync(WEB_DB);
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  // Keep the browser DB lean: the website uses episode-level FTS + the small
+  // episode embeddings (for semantic search). The 177k-row segment tables are
+  // MCP-only — drop them from the web copy so the static file stays small and
+  // range requests touch fewer pages.
   db.exec("PRAGMA journal_mode=DELETE");
+  db.exec("DROP TABLE IF EXISTS segments_fts");
+  db.exec("DROP TABLE IF EXISTS segments");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   db.exec("PRAGMA page_size=4096");
   db.exec("VACUUM");
   const n = (db.prepare("SELECT COUNT(*) n FROM episodes").get() as any).n;
+  const emb = (db.prepare("SELECT COUNT(*) n FROM embeddings").get() as any).n;
+  console.error(`web/sgu.db: ${n} episodes, ${emb} episode embeddings (segments dropped for size)`);
   db.close();
   await rm(WEB_DB + "-wal", { force: true });
   await rm(WEB_DB + "-shm", { force: true });

@@ -4,7 +4,16 @@
 import { readdir, readFile, mkdir, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDb, initSchema, upsertEpisode, corpusStats, DB_PATH } from "../src/db.js";
+import {
+  openDb,
+  initSchema,
+  upsertEpisode,
+  insertSegments,
+  rebuildSegmentsFts,
+  corpusStats,
+  DB_PATH,
+} from "../src/db.js";
+import { parseSegments } from "../src/segments.js";
 import type { Frontmatter } from "../src/markdown.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -88,6 +97,7 @@ async function main() {
   const files = (await readdir(EP_DIR)).filter((f) => f.endsWith(".md")).sort();
   console.error(`Indexing ${files.length} episodes…`);
   let n = 0;
+  let segCount = 0;
   db.exec("BEGIN");
   for (const f of files) {
     const md = await readFile(join(EP_DIR, f), "utf8");
@@ -95,12 +105,32 @@ async function main() {
     if (!fm.episode) continue;
     const frontmatter = fmToFrontmatter(fm, `episodes/${f}`);
     upsertEpisode(db, { fm: frontmatter, path: `episodes/${f}`, transcript: body });
-    if (++n % 100 === 0) console.error(`  ${n}/${files.length}`);
+
+    // Segment-level rows: one per speaker turn, with the episode date denormalized.
+    const segs = parseSegments(md).map((s) => ({
+      episode: frontmatter.episode,
+      seq: s.seq,
+      date: frontmatter.date,
+      section: s.section,
+      timestamp: s.timestamp,
+      speaker: s.speakerName,
+      text: s.text,
+    }));
+    insertSegments(db, segs);
+    segCount += segs.length;
+
+    if (++n % 100 === 0) console.error(`  ${n}/${files.length} episodes, ${segCount} segments`);
   }
   db.exec("COMMIT");
 
+  console.error("Building segment full-text index…");
+  rebuildSegmentsFts(db);
+
   const stats = corpusStats(db);
-  console.error(`\nIndexed ${stats.episodes} episodes. Range: ${stats.earliest ?? "?"} → ${stats.latest ?? "?"}`);
+  console.error(
+    `\nIndexed ${stats.episodes} episodes, ${stats.segments} segments. ` +
+      `Range: ${stats.earliest ?? "?"} → ${stats.latest ?? "?"}`
+  );
   db.close();
 }
 

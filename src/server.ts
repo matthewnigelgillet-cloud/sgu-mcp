@@ -15,7 +15,17 @@ import {
   extractSectionText,
   cleanWikitext,
 } from "./parse.js";
-import { openDb, searchCorpus, getEpisodeMeta, corpusStats } from "./db.js";
+import {
+  openDb,
+  searchCorpus,
+  getEpisodeMeta,
+  corpusStats,
+  searchSegments,
+  countMentions,
+  semanticEpisodes,
+} from "./db.js";
+import { countOccurrences } from "./segments.js";
+import { getEmbedder, providerFromEnv } from "./embeddings.js";
 import type { DatabaseSync } from "node:sqlite";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -319,7 +329,156 @@ export function createServer(): McpServer {
     }
   );
 
-  // 9. Archive stats -----------------------------------------------------------
+  // 9. Segment-level search ("jump to the moment") ----------------------------
+  server.registerTool(
+    "search_segments",
+    {
+      title: "Search SGU segments (timecoded)",
+      description:
+        "Fine-grained full-text search over individual speaker turns in the local archive. Unlike " +
+        "search_episodes (which returns whole episodes), this returns the exact moments — each result has " +
+        "the episode, date, segment/section, the timestamp to jump to, the speaker, and a highlighted snippet. " +
+        "Use for 'find the moment when…', quoting who said what, or narrowing within an episode. " +
+        "Optional filters: episode, speaker (e.g. 'Steve', 'Cara'), year.",
+      inputSchema: {
+        query: z.string().describe("Search terms (FTS syntax supported: phrases, AND/OR, prefix*)"),
+        limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)"),
+        episode: z.number().int().positive().optional().describe("Restrict to one episode"),
+        speaker: z.string().optional().describe("Restrict to a speaker, e.g. 'Steve', 'Bob', 'Cara'"),
+        year: z.string().regex(/^\d{4}$/).optional().describe("Restrict to a year, e.g. '2024'"),
+      },
+    },
+    async ({ query, limit, episode, speaker, year }) => {
+      const db = localDb();
+      if (!db)
+        return err(
+          "Local index not built yet. Run `npm run setup` (prebuilt) or `npm run fetch && npm run index`."
+        );
+      try {
+        const hits = searchSegments(db, query, { limit: limit ?? 10, episode, speaker, year });
+        return json({ query, count: hits.length, results: hits });
+      } catch (e: any) {
+        return err(`search_segments failed: ${e.message}`);
+      }
+    }
+  );
+
+  // 10. Mention counting / analytics ------------------------------------------
+  server.registerTool(
+    "count_mentions",
+    {
+      title: "Count SGU mentions of a term",
+      description:
+        "Count how many times a word or phrase is actually said across the whole archive — a real occurrence " +
+        "count, not just how many episodes match. Returns the total, segments/episodes matched, and breakdowns " +
+        "by year, by speaker, and the top episodes by frequency. Use for questions like 'how many times have " +
+        "they said homeopathy?' or 'who says \"awesome\" the most?'. Matches the stem and its inflections " +
+        "(e.g. homeopath → homeopathy, homeopathic). Covers transcribed episodes only (a few weeks behind release).",
+      inputSchema: {
+        term: z.string().describe("The word or phrase to count (stem; inflections are included)"),
+        top_episodes: z.number().int().min(1).max(50).optional().describe("How many top episodes to list (default 10)"),
+      },
+    },
+    async ({ term, top_episodes }) => {
+      const db = localDb();
+      if (!db)
+        return err(
+          "Local index not built yet. Run `npm run setup` (prebuilt) or `npm run fetch && npm run index`."
+        );
+      try {
+        const result = countMentions(db, term, countOccurrences, { topEpisodes: top_episodes ?? 10 });
+        return json(result);
+      } catch (e: any) {
+        return err(`count_mentions failed: ${e.message}`);
+      }
+    }
+  );
+
+  // 11. Semantic / hybrid search ----------------------------------------------
+  server.registerTool(
+    "semantic_search",
+    {
+      title: "Semantic search SGU episodes",
+      description:
+        "Concept-level search that finds episodes by meaning, not just keywords — ask in natural language " +
+        "(e.g. 'episodes about the ethics of de-extinction' or 'when they got frustrated with science denial'). " +
+        "Blends vector similarity with keyword (BM25) ranking via reciprocal-rank fusion. Returns episodes with " +
+        "title, date, theme, and a fused relevance score. Requires the embedding index (`npm run embed`); the " +
+        "provider is set by EMBED_PROVIDER (default 'local', no API key). Prefer search_episodes/search_segments " +
+        "for exact words; use this for fuzzy, conceptual questions.",
+      inputSchema: {
+        query: z.string().describe("A natural-language description of what you're looking for"),
+        limit: z.number().int().min(1).max(30).optional().describe("Max episodes (default 10)"),
+        mode: z
+          .enum(["hybrid", "semantic", "keyword"])
+          .optional()
+          .describe("hybrid (default) blends vector + keyword; semantic = vectors only; keyword = BM25 only"),
+      },
+    },
+    async ({ query, limit, mode }) => {
+      const db = localDb();
+      if (!db)
+        return err(
+          "Local index not built yet. Run `npm run setup` (prebuilt) or `npm run fetch && npm run index`."
+        );
+      const k = limit ?? 10;
+      const useMode = mode ?? "hybrid";
+      try {
+        // Lexical ranking (always available).
+        const lexical = useMode === "semantic" ? [] : searchCorpus(db, query, 50).map((r) => r.episode);
+
+        // Semantic ranking (needs embeddings + the embedder for the query vector).
+        let semantic: number[] = [];
+        if (useMode !== "keyword") {
+          const provider = providerFromEnv();
+          try {
+            const embedder = await getEmbedder(provider);
+            const [qvec] = await embedder.embed([query]);
+            semantic = semanticEpisodes(db, provider, qvec, 50).map((r) => r.episode);
+          } catch (e: any) {
+            if (useMode === "semantic")
+              return err(
+                `Semantic search unavailable: ${e.message}\nRun \`npm run embed\` to build the vector index, ` +
+                  `or use search_episodes / search_segments for keyword search.`
+              );
+            // hybrid: degrade gracefully to keyword-only
+          }
+        }
+
+        if (!lexical.length && !semantic.length)
+          return err(
+            "No results. The embedding index may be missing — run `npm run embed`, or use search_episodes."
+          );
+
+        // Reciprocal-rank fusion: robust blend without score normalization.
+        const RRF_K = 60;
+        const fused = new Map<number, number>();
+        const add = (list: number[]) =>
+          list.forEach((ep, i) => fused.set(ep, (fused.get(ep) || 0) + 1 / (RRF_K + i)));
+        add(lexical);
+        add(semantic);
+
+        const ranked = [...fused.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, k)
+          .map(([episode, score]) => {
+            const m = getEpisodeMeta(db, episode);
+            return {
+              episode,
+              title: m?.title ?? null,
+              date: m?.date ?? null,
+              theme: m?.theme ?? null,
+              score: Number(score.toFixed(5)),
+            };
+          });
+        return json({ query, mode: useMode, count: ranked.length, results: ranked });
+      } catch (e: any) {
+        return err(`semantic_search failed: ${e.message}`);
+      }
+    }
+  );
+
+  // 12. Archive stats ----------------------------------------------------------
   server.registerTool(
     "archive_stats",
     {

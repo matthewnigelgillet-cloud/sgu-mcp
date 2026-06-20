@@ -76,9 +76,12 @@ public sources:
 
 | Tool | What it does |
 |---|---|
-| `search_episodes` | bm25-ranked FTS5 search over the whole archive, highlighted snippets + metadata. Optional `field`: `transcript` / `news` / `title`. |
+| `search_episodes` | bm25-ranked FTS5 search over the whole archive (episode-level), highlighted snippets + metadata. Optional `field`: `transcript` / `news` / `title`. |
+| `search_segments` | **Segment-level** search — returns the exact moments with **timestamp + speaker** ("jump to the moment"). Filters: `episode`, `speaker`, `year`. |
+| `count_mentions` | Real **occurrence count** of a word/phrase across the archive, with breakdowns by year, by speaker, and top episodes. Answers "how many times did they say X?". |
+| `semantic_search` | **Natural-language / conceptual** search. Blends vector similarity with BM25 (reciprocal-rank fusion). Needs the embedding index (`npm run embed`). |
 | `get_episode_markdown` | Full Markdown doc (frontmatter + transcript) for an episode from the local archive. |
-| `archive_stats` | Episode count + date range covered by the local index. |
+| `archive_stats` | Episode + segment counts, date range, and which embeddings are present. |
 
 **Live wiki / RSS (newest episodes + fallback):**
 
@@ -104,6 +107,24 @@ npm run index    # build data/sgu.db (SQLite FTS5) from the .md corpus
 
 `fetch` is polite (limited concurrency, rate-limited, retries) and **resumable** — re-running only
 fetches missing episodes. Use `--force` to re-scrape, or `--only 1075,1074` for specific episodes.
+
+### Segment index & semantic search
+
+`npm run index` builds two layers from the corpus: the episode FTS index **and** a
+**segment index** (one row per speaker turn, ~178k rows) that powers `search_segments`
+(timecoded, per-speaker) and `count_mentions` (true occurrence counts).
+
+For conceptual / natural-language search, build the embedding index:
+
+```bash
+npm run embed                          # local model (default) — no API key, no cost
+EMBED_PROVIDER=openai npm run embed     # needs OPENAI_API_KEY (one-time, ~cents)
+EMBED_PROVIDER=voyage npm run embed     # needs VOYAGE_API_KEY
+```
+
+Embeddings are **episode-level** (one vector each), computed once. `semantic_search` then
+blends them with keyword ranking. The provider for *query* embedding is set by
+`EMBED_PROVIDER` (default `local`, via `@xenova/transformers`, an optional dependency).
 
 ### A note on Science or Fiction answers
 
@@ -138,7 +159,7 @@ claude mcp add --transport http sgu https://your-host.example.com/mcp \
 
 **Deploy on Render:** `render.yaml` defines the connector as a Node web service
 (`sgu-mcp-connector`). It downloads the prebuilt index at build time (no scraping), serves the same
-9 tools, and reads `SGU_MCP_TOKEN` from the dashboard.
+12 tools, and reads `SGU_MCP_TOKEN` from the dashboard.
 
 > **Public Claude.ai connector?** Anthropic's hosted Claude.ai expects a full **OAuth 2.1** flow for
 > custom remote connectors. The bearer-token mode here is perfect for self-hosting and for
@@ -160,10 +181,17 @@ server, no API key — so it costs nothing to run no matter how much traffic it 
   - **Counting questions** — "how many times was homeopathy mentioned in 2024?" → a number, a
     per-year breakdown, and the episodes themselves.
   - Filter by year; jump straight to the transcript or the audio.
+  - **"Find by meaning" (semantic search)** with two modes, so it works for everyone and never
+    costs *you* per query:
+    - **Free** — embeds the query in the visitor's browser via `@xenova/transformers` (loads a
+      ~25 MB model once). No key, no cost; a little slower.
+    - **Best** — the visitor pastes their **own** OpenAI key; their browser calls OpenAI for the
+      query embedding (fast, highest quality). Requires that you published OpenAI doc vectors once
+      (`EMBED_PROVIDER=openai npm run embed`); otherwise the panel says so and Free mode still works.
+    Doc vectors ship inside the static DB, so ranking happens entirely in the browser.
   - **Optional "Ask Claude"** — a BYOK panel where the visitor pastes *their own* Anthropic API key;
     their browser calls the API directly (never this site), and Claude answers from the top
-    transcript excerpts, citing episode numbers. The site ships a strict Content-Security-Policy
-    that only allows network calls to `api.anthropic.com`. See [SECURITY.md](SECURITY.md).
+    transcript excerpts, citing episode numbers. See [SECURITY.md](SECURITY.md).
 
 ### Build & run the web archive locally
 
@@ -201,8 +229,9 @@ it also pings Render so the website redeploys with the new data.
 - `npm run dev` — run the stdio server from source with `tsx` (no build step)
 - `npm run dev:http` — run the HTTP connector from source
 - `npm run smoke` — live test against SGU sources
-- Source: `src/` — `server.ts` (the 9 tools), `index.ts` (stdio entry), `http.ts` (HTTP entry),
-  `wiki.ts` (MediaWiki client), `rss.ts` (feed), `parse.ts` (wikitext parsers), `db.ts` (FTS5)
+- Source: `src/` — `server.ts` (the 12 tools), `index.ts` (stdio entry), `http.ts` (HTTP entry),
+  `wiki.ts` (MediaWiki client), `rss.ts` (feed), `parse.ts` (wikitext parsers), `db.ts` (FTS5 +
+  segments + vectors), `segments.ts` (speaker-turn parser), `embeddings.ts` (providers)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Code is MIT ([LICENSE](LICENSE)); transcript/audio content
 belongs to their authors — this is an unofficial fan tool.

@@ -253,6 +253,146 @@ async function askClaude() {
   }
 }
 
+// ---- Semantic search: find episodes by meaning -----------------------------
+// Doc vectors are shipped in the DB (one per episode). At query time we embed
+// just the query — either in-browser (free, transformers.js) or via the
+// visitor's own OpenAI key (best). Both compare against vectors made the same
+// way (provider column), so the spaces match.
+const sem = {
+  mode: $("sem-mode"),
+  key: $("sem-openai-key"),
+  q: $("sem-q"),
+  btn: $("sem-btn"),
+  status: $("sem-status"),
+};
+const vecCache = {}; // provider -> [{episode,title,date,theme,vec:Float32Array}]
+let localExtractor = null;
+
+sem.key.value = localStorage.getItem("sgu_openai_key") || "";
+sem.mode.addEventListener("change", () => {
+  sem.key.hidden = sem.mode.value !== "openai";
+});
+sem.btn.addEventListener("click", () => runSemantic().catch((e) => semStatus(`Error: ${e.message}`, true)));
+sem.q.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sem.btn.click();
+});
+
+function semStatus(msg, isErr) {
+  sem.status.hidden = !msg;
+  sem.status.textContent = msg || "";
+  sem.status.style.color = isErr ? "var(--err, #c00)" : "";
+}
+
+function bytesToFloat32(u8) {
+  // sql.js returns BLOBs as Uint8Array; reinterpret as little-endian Float32.
+  const b = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+  return new Float32Array(b);
+}
+
+async function loadVectors(provider) {
+  if (vecCache[provider]) return vecCache[provider];
+  const rows = await db.query(
+    `SELECT e.episode AS episode, e.title AS title, e.date AS date, e.theme AS theme, m.vector AS vector
+     FROM embeddings m JOIN episodes e ON e.episode = m.episode
+     WHERE m.provider = :p`,
+    { ":p": provider }
+  );
+  if (!rows.length) return null;
+  vecCache[provider] = rows.map((r) => ({
+    episode: r.episode,
+    title: r.title,
+    date: r.date,
+    theme: r.theme,
+    vec: bytesToFloat32(r.vector),
+  }));
+  return vecCache[provider];
+}
+
+function normalize(v) {
+  let n = 0;
+  for (let i = 0; i < v.length; i++) n += v[i] * v[i];
+  n = Math.sqrt(n) || 1;
+  for (let i = 0; i < v.length; i++) v[i] /= n;
+  return v;
+}
+
+async function embedLocal(text) {
+  if (!localExtractor) {
+    semStatus("Loading the language model (one-time, ~25 MB)…");
+    const { pipeline, env } = await import("https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2");
+    env.allowLocalModels = false;
+    localExtractor = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+  }
+  const out = await localExtractor(text, { pooling: "mean", normalize: true });
+  return normalize(Float32Array.from(out.data));
+}
+
+async function embedOpenAI(text, key) {
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model: "text-embedding-3-small", input: text }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(`OpenAI ${res.status}: ${data?.error?.message || "request failed"}`);
+  return normalize(Float32Array.from(data.data[0].embedding));
+}
+
+async function runSemantic() {
+  const query = sem.q.value.trim();
+  if (!query) return semStatus("Type what you're looking for first.", true);
+  const provider = sem.mode.value;
+
+  const vectors = await loadVectors(provider);
+  if (!vectors) {
+    semStatus(
+      provider === "openai"
+        ? "This archive doesn't have OpenAI embeddings published — the site owner can add them with `EMBED_PROVIDER=openai npm run embed`. Try the Free mode."
+        : "No embeddings found in this archive.",
+      true
+    );
+    return;
+  }
+
+  let qvec;
+  if (provider === "openai") {
+    const key = sem.key.value.trim();
+    if (!key) return semStatus("Enter your OpenAI key for ‘Best’ mode, or switch to Free.", true);
+    localStorage.setItem("sgu_openai_key", key);
+    semStatus("Embedding your query via OpenAI…");
+    qvec = await embedOpenAI(query, key);
+  } else {
+    qvec = await embedLocal(query);
+  }
+
+  semStatus("Ranking episodes…");
+  const scored = vectors
+    .map((d) => {
+      let s = 0;
+      const n = Math.min(qvec.length, d.vec.length);
+      for (let i = 0; i < n; i++) s += qvec[i] * d.vec[i];
+      return { ...d, score: s };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20);
+
+  semStatus("");
+  els.summary.hidden = true;
+  els.aiPanel.hidden = true;
+  els.results.innerHTML =
+    `<p class="loading" style="opacity:.7">Episodes most related to “${escapeHtml(query)}”, by meaning:</p>` +
+    scored
+      .map((r) => {
+        const date = r.date ? String(r.date).slice(0, 10) : "";
+        const url = `https://www.sgutranscripts.org/wiki/SGU_Episode_${r.episode}`;
+        return `<article class="result">
+          <h3><a href="${url}" target="_blank" rel="noopener">Episode ${r.episode}${r.theme ? ` — <span style="color:var(--muted);font-weight:400">${escapeHtml(r.theme)}</span>` : ""}</a></h3>
+          <div class="meta">${date} · relevance ${(r.score * 100).toFixed(0)}%</div>
+        </article>`;
+      })
+      .join("");
+}
+
 function stripTags(s) {
   return String(s || "").replace(/<[^>]+>/g, "");
 }

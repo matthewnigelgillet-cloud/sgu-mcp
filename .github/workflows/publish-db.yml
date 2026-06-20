@@ -34,18 +34,24 @@ jobs:
       - name: Scrape transcripts (resumable, rate-limited)
         run: npm run fetch
 
-      - name: Build FTS index
+      - name: Build FTS + segment index
         run: npm run index
 
-      - name: Prepare browser DB (vacuumed, range-ready)
-        run: npm run web
+      - name: Build episode embeddings (local model, no key)
+        run: npm run embed
+
+      - name: Checkpoint the full index into a single file
+        run: |
+          # Ship the FULL data/sgu.db (episodes + 178k segments + embeddings) so
+          # npx users and the connector get search_segments / count_mentions /
+          # semantic_search. The website build strips segments itself (npm run web).
+          node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync('data/sgu.db');db.exec('PRAGMA wal_checkpoint(TRUNCATE)');db.exec('PRAGMA journal_mode=DELETE');db.exec('VACUUM');db.close();"
+          cp data/sgu.db sgu.db
 
       - name: Publish index to the db-latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Vacuumed, single-file DB (web/sgu.db) is the cleanest artifact to ship.
-          cp web/sgu.db sgu.db
           gzip -k -9 sgu.db   # also publish a compressed copy for faster downloads
           if gh release view db-latest >/dev/null 2>&1; then
             gh release upload db-latest sgu.db sgu.db.gz --clobber
@@ -57,5 +63,12 @@ jobs:
           fi
 
       - name: Refresh the website (optional)
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_URL != '' }}
-        run: curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            curl -fsSL -X POST "$HOOK"
+            echo "Render redeploy triggered."
+          else
+            echo "RENDER_DEPLOY_HOOK_URL not set — skipping website refresh."
+          fi

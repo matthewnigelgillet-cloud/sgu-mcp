@@ -34,8 +34,11 @@ npm run index      # build data/sgu.db (FTS5) from the corpus
 
 | Path | What |
 |---|---|
-| `src/index.ts` | MCP server (stdio) — the 9 tools |
-| `src/http.ts` | MCP server (Streamable HTTP) — for remote / connector hosting |
+| `src/server.ts` | Shared tool registry — all 12 tools (used by both transports) |
+| `src/index.ts` | MCP server (stdio) entrypoint |
+| `src/http.ts` | MCP server (Streamable HTTP) entrypoint — remote / connector hosting |
+| `src/segments.ts` | Speaker-turn parser + occurrence counter |
+| `src/embeddings.ts` | Pluggable embedding providers (local / openai / voyage) |
 | `src/wiki.ts` | MediaWiki API client |
 | `src/rss.ts` | Podcast RSS client |
 | `src/parse.ts` | Wikitext parsers (info box, news items, Science or Fiction) |
