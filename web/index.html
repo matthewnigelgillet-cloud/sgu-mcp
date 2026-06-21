@@ -3,78 +3,106 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<!-- Strict CSP: scripts/workers/wasm same-origin only; the only outbound
-     connection allowed is the visitor's own browser -> Anthropic API (BYOK).
-     This limits the blast radius if anything tried to exfiltrate the API key. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.openai.com https://cdn.jsdelivr.net https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'" />
-<title>SGU Archive — search The Skeptics' Guide to the Universe</title>
-<meta name="description" content="Search every episode transcript of The Skeptics' Guide to the Universe. Count mentions by year, find segments, read the moments — all in your browser." />
+<!-- Strict CSP: scripts/workers/wasm same-origin (+ jsdelivr for the optional
+     in-browser embedding model). The only outbound data connections allowed are
+     the visitor's own browser -> Anthropic / OpenAI (BYOK) and the model CDNs.
+     Fonts come from Google Fonts (stylesheet + files). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.anthropic.com https://api.openai.com https://cdn.jsdelivr.net https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co; base-uri 'none'; form-action 'none'; object-src 'none'" />
+<!-- favicon: a four-line emission spectrum (red→violet), the site's signature -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230a0e1a'/%3E%3Crect x='3' y='3' width='1.4' height='10' fill='%23ff4d4d'/%3E%3Crect x='6' y='3' width='1.4' height='10' fill='%23d4ff4d'/%3E%3Crect x='9' y='3' width='1.4' height='10' fill='%2341e0ff'/%3E%3Crect x='12' y='3' width='1.4' height='10' fill='%238b5cff'/%3E%3C/svg%3E" />
+<title>SGU Archive — read twenty years of The Skeptics' Guide off the record</title>
+<meta name="description" content="Search every transcript of The Skeptics' Guide to the Universe. See when a topic was covered across 20 years, find the moment, read it — all in your browser." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
 <header>
-  <h1>The SGU Archive</h1>
-  <p class="tagline">Search every transcript of <em>The Skeptics' Guide to the Universe</em> — <span id="stat-line">loading the archive…</span></p>
+  <div class="wordmark">
+    <h1>SGU Archive</h1>
+    <span class="unofficial">unofficial · 2005–present</span>
+  </div>
+  <p class="telemetry"><span id="stat-line">spinning up the archive…</span></p>
+  <p class="tagline">Read twenty years of <em>The Skeptics' Guide to the Universe</em> off the record. Every transcript, searchable.</p>
 </header>
 
 <main>
-  <form id="search-form" autocomplete="off">
-    <div class="search-row">
-      <input id="q" type="search" placeholder="Search the transcripts — e.g. homeopathy, CRISPR, &quot;cold fusion&quot;" aria-label="Search query" />
-      <select id="year" aria-label="Filter by year"><option value="">All years</option></select>
-      <button type="submit">Search</button>
+  <section class="console">
+    <div class="mode-tabs" role="tablist" aria-label="Search mode">
+      <button class="mode-tab" role="tab" aria-selected="true" data-panel="panel-search" id="tab-search">Search</button>
+      <button class="mode-tab" role="tab" aria-selected="false" data-panel="panel-meaning" id="tab-meaning">Find by meaning</button>
+      <button class="mode-tab" role="tab" aria-selected="false" data-panel="panel-ask" id="tab-ask">Ask Claude</button>
     </div>
-    <p class="hint">Tip: use quotes for exact phrases, <code>AND</code>/<code>OR</code> between words, or <code>vaccin*</code> for prefixes.</p>
-  </form>
 
-  <section id="semantic-panel">
-    <details>
-      <summary>🔮 Find by meaning <span class="byok-badge">semantic search</span></summary>
-      <div class="ai-body">
-        <p class="ai-note">Describe what you're after in plain language — e.g. <em>"the ethics of bringing extinct animals back"</em> — and this finds the most relevant episodes by meaning, not just keywords.</p>
-        <div class="ai-controls">
-          <select id="sem-mode" aria-label="Semantic engine">
-            <option value="local">Free — runs in your browser (slower; loads a small model the first time)</option>
-            <option value="openai">Best — uses your OpenAI key (fast, highest quality)</option>
-          </select>
+    <div class="mode-panel active" id="panel-search" role="tabpanel" aria-labelledby="tab-search">
+      <form id="search-form" autocomplete="off">
+        <div class="search-row">
+          <label class="field">
+            <span class="prompt" aria-hidden="true">&gt;</span>
+            <input id="q" type="search" placeholder="Search the transcripts — homeopathy, CRISPR, &quot;cold fusion&quot;" aria-label="Search query" />
+          </label>
+          <select id="year" aria-label="Filter by year"><option value="">All years</option></select>
+          <button type="submit">Search</button>
         </div>
-        <input id="sem-openai-key" type="password" placeholder="sk-… (OpenAI key, only for ‘Best’ mode)" aria-label="OpenAI API key" hidden />
-        <div class="ai-controls">
-          <input id="sem-q" type="text" placeholder="What are you looking for?" aria-label="Semantic query" />
-          <button id="sem-btn" type="button">Find episodes</button>
-        </div>
-        <div id="sem-status" class="ai-note" hidden></div>
+      </form>
+      <p class="hint">Quotes for exact phrases · <code>AND</code> / <code>OR</code> between words · <code>vaccin*</code> for prefixes</p>
+    </div>
+
+    <div class="mode-panel" id="panel-meaning" role="tabpanel" aria-labelledby="tab-meaning" hidden>
+      <p class="ai-note">Describe what you're after in plain language — e.g. <em>"the ethics of bringing extinct animals back"</em> — and find the closest episodes by meaning, not just keywords.</p>
+      <div class="ai-controls">
+        <select id="sem-mode" aria-label="Semantic engine">
+          <option value="local">Free — runs in your browser (slower; loads a small model once)</option>
+          <option value="openai">Best — uses your OpenAI key (fast, highest quality)</option>
+        </select>
       </div>
-    </details>
+      <input id="sem-openai-key" type="password" placeholder="sk-… OpenAI key (only for ‘Best’ mode)" aria-label="OpenAI API key" hidden />
+      <div class="search-row">
+        <label class="field">
+          <span class="prompt" aria-hidden="true">≈</span>
+          <input id="sem-q" type="text" placeholder="What are you looking for?" aria-label="Semantic query" />
+        </label>
+        <button id="sem-btn" type="button">Find episodes</button>
+      </div>
+      <p id="sem-status" hidden></p>
+    </div>
+
+    <div class="mode-panel" id="panel-ask" role="tabpanel" aria-labelledby="tab-ask" hidden>
+      <p class="ai-note">Run a search first, then ask a question — Claude answers from the top transcript excerpts and cites episode numbers. Your key stays in this browser and goes straight to Anthropic, never to this site. <span class="byok-badge">your key</span></p>
+      <div class="ai-controls">
+        <input id="api-key" type="password" placeholder="sk-ant-…" aria-label="Anthropic API key" />
+        <select id="model" aria-label="Model">
+          <option value="claude-haiku-4-5">Haiku 4.5 — cheapest</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6 — balanced</option>
+          <option value="claude-opus-4-8">Opus 4.8 — most capable</option>
+        </select>
+      </div>
+      <input id="ai-question" type="text" placeholder="What does the show say about this? (optional — defaults to a summary)" aria-label="Question for Claude" />
+      <button id="ask-btn" type="button">Ask Claude</button>
+      <div id="ai-answer" hidden></div>
+    </div>
+  </section>
+
+  <section class="record" aria-label="Coverage over time">
+    <div class="record-head">
+      <span>The Record · 2005–2026</span>
+      <span class="legend"><b>2005 redshifted</b> → <i>2026 blueshifted</i></span>
+    </div>
+    <div class="record-canvas-wrap">
+      <canvas id="record-canvas" aria-hidden="true"></canvas>
+      <div class="record-tip" id="record-tip"></div>
+    </div>
+    <div class="record-axis" id="record-axis" aria-hidden="true"></div>
   </section>
 
   <section id="summary" hidden></section>
-
-  <section id="ai-panel" hidden>
-    <details>
-      <summary>🤖 Ask Claude about these results <span class="byok-badge">bring your own API key</span></summary>
-      <div class="ai-body">
-        <p class="ai-note">Your key is stored only in this browser and sent directly to Anthropic — never to this site. Get one at <a href="https://console.anthropic.com/" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
-        <div class="ai-controls">
-          <input id="api-key" type="password" placeholder="sk-ant-…" aria-label="Anthropic API key" />
-          <select id="model" aria-label="Model">
-            <option value="claude-haiku-4-5">Haiku 4.5 — cheapest</option>
-            <option value="claude-sonnet-4-6">Sonnet 4.6 — balanced</option>
-            <option value="claude-opus-4-8">Opus 4.8 — most capable</option>
-          </select>
-        </div>
-        <input id="ai-question" type="text" placeholder="What does the show say about this? (optional — defaults to a summary)" aria-label="Question for Claude" />
-        <button id="ask-btn" type="button">Ask Claude using the top results</button>
-        <div id="ai-answer" hidden></div>
-      </div>
-    </details>
-  </section>
 
   <section id="results"></section>
 </main>
 
 <footer>
-  <p>Transcripts © their authors, from <a href="https://www.sgutranscripts.org/" target="_blank" rel="noopener">sgutranscripts.org</a> (volunteer-made). Audio from the official <a href="https://www.theskepticsguide.org/" target="_blank" rel="noopener">SGU</a> feed. This is an unofficial fan archive. Search runs entirely in your browser.</p>
+  <p>Transcripts © their authors, from <a href="https://www.sgutranscripts.org/" target="_blank" rel="noopener">sgutranscripts.org</a> (volunteer-made). Audio from the official <a href="https://www.theskepticsguide.org/" target="_blank" rel="noopener">SGU</a> feed. Unofficial fan archive — search runs entirely in your browser.</p>
 </footer>
 
 <!-- sql.js-httpvfs is a UMD bundle — load as a classic script so it attaches createDbWorker to window -->

@@ -23,16 +23,166 @@ const els = {
   year: $("year"),
   summary: $("summary"),
   results: $("results"),
-  aiPanel: $("ai-panel"),
   apiKey: $("api-key"),
   model: $("model"),
   question: $("ai-question"),
   askBtn: $("ask-btn"),
   aiAnswer: $("ai-answer"),
+  canvas: $("record-canvas"),
+  tip: $("record-tip"),
+  axis: $("record-axis"),
 };
+
+// ---- Mode tabs: switch the visible input (Search / Meaning / Ask) ----------
+const tabs = [...document.querySelectorAll(".mode-tab")];
+tabs.forEach((tab) =>
+  tab.addEventListener("click", () => {
+    tabs.forEach((t) => {
+      const on = t === tab;
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      const panel = $(t.dataset.panel);
+      panel.classList.toggle("active", on);
+      panel.hidden = !on;
+    });
+    const focusId = { "panel-search": "q", "panel-meaning": "sem-q", "panel-ask": "api-key" }[tab.dataset.panel];
+    $(focusId)?.focus();
+  })
+);
 
 let db = null;
 let lastResults = []; // top results from the most recent search, for the AI panel
+
+// ---- The Record: a 20-year emission spectrum, ticks colored by time --------
+// Older episodes are drawn redshifted (long wavelength), newer ones blueshifted.
+// On a search, matching episodes flare to full brightness — you read a topic's
+// coverage across two decades as bright lines against the faint archive.
+const Spectrum = {
+  eps: [], // { episode, t, year }
+  min: 0,
+  max: 1,
+  matched: null, // Set<episode> | null
+  pad: 10,
+  init(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.addEventListener("resize", () => this.resize());
+    canvas.addEventListener("pointermove", (e) => this.hover(e));
+    canvas.addEventListener("pointerleave", () => (els.tip.style.opacity = 0));
+    canvas.addEventListener("pointerdown", (e) => this.click(e));
+  },
+  setEpisodes(rows) {
+    this.eps = rows
+      .map((r) => ({ episode: r.episode, t: Date.parse(r.d), year: String(r.d).slice(0, 4) }))
+      .filter((e) => !Number.isNaN(e.t));
+    this.min = Math.min(...this.eps.map((e) => e.t));
+    this.max = Math.max(...this.eps.map((e) => e.t));
+    this.renderAxis();
+    this.resize();
+  },
+  // Map a 0..1 position (0 = oldest) to a visible wavelength, then to RGB.
+  // 0 -> 645nm (red), 1 -> 415nm (violet): the redshift gradient.
+  color(p) {
+    const nm = 645 - p * (645 - 415);
+    let r = 0, g = 0, b = 0;
+    if (nm < 440) { r = -(nm - 440) / (440 - 380); b = 1; }
+    else if (nm < 490) { g = (nm - 440) / (490 - 440); b = 1; }
+    else if (nm < 510) { g = 1; b = -(nm - 510) / (510 - 490); }
+    else if (nm < 580) { r = (nm - 510) / (580 - 510); g = 1; }
+    else if (nm < 645) { r = 1; g = -(nm - 645) / (645 - 580); }
+    else { r = 1; }
+    return [Math.round(255 * r), Math.round(255 * g), Math.round(255 * b)];
+  },
+  x(t) {
+    const W = this.canvas.clientWidth;
+    return this.pad + ((t - this.min) / (this.max - this.min || 1)) * (W - 2 * this.pad);
+  },
+  resize() {
+    if (!this.canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = this.canvas.clientWidth, H = this.canvas.clientHeight;
+    this.canvas.width = W * dpr;
+    this.canvas.height = H * dpr;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.draw();
+  },
+  render(matched, activeYear) {
+    this.matched = matched && matched.size ? matched : null;
+    this.activeYear = activeYear || "";
+    this.draw();
+  },
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx || !this.eps.length) return;
+    const W = this.canvas.clientWidth, H = this.canvas.clientHeight;
+    ctx.clearRect(0, 0, W, H);
+    const baseY = H - 2;
+    const span = this.max - this.min || 1;
+
+    for (const e of this.eps) {
+      const p = (e.t - this.min) / span;
+      const [r, g, b] = this.color(p);
+      const x = this.x(e.t);
+      const hit = this.matched ? this.matched.has(e.episode) : null;
+      const dimYear = this.activeYear && e.year !== this.activeYear;
+      let alpha, h;
+      if (this.matched) {
+        alpha = hit ? (dimYear ? 0.5 : 1) : 0.06;
+        h = hit ? H - 8 : 9;
+      } else {
+        alpha = 0.22;
+        h = 12;
+      }
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = `rgb(${r},${g},${b})`;
+      ctx.lineWidth = this.matched && hit ? 1.6 : 1;
+      if (this.matched && hit) {
+        ctx.shadowColor = `rgb(${r},${g},${b})`;
+        ctx.shadowBlur = 6;
+      } else {
+        ctx.shadowBlur = 0;
+      }
+      ctx.beginPath();
+      ctx.moveTo(x, baseY);
+      ctx.lineTo(x, baseY - h);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+  },
+  renderAxis() {
+    const years = [...new Set(this.eps.map((e) => e.year))].sort();
+    if (!years.length) return;
+    const step = Math.ceil(years.length / 8);
+    const ticks = years.filter((_, i) => i % step === 0);
+    els.axis.innerHTML = ticks.map((y) => `<span>${y}</span>`).join("");
+  },
+  nearest(clientX) {
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    let best = null, bd = 1e9;
+    for (const e of this.eps) {
+      const d = Math.abs(this.x(e.t) - mx);
+      if (d < bd) { bd = d; best = e; }
+    }
+    return bd < 8 ? best : null;
+  },
+  hover(e) {
+    const ep = this.nearest(e.clientX);
+    if (!ep) { els.tip.style.opacity = 0; return; }
+    const rect = this.canvas.getBoundingClientRect();
+    els.tip.textContent = `EP ${ep.episode} · ${new Date(ep.t).toISOString().slice(0, 10)}`;
+    els.tip.style.left = `${this.x(ep.t)}px`;
+    els.tip.style.top = `${e.clientY - rect.top}px`;
+    els.tip.style.opacity = 1;
+  },
+  click(e) {
+    const ep = this.nearest(e.clientX);
+    if (!ep) return;
+    els.year.value = els.year.value === ep.year ? "" : ep.year;
+    runSearch();
+  },
+};
 
 async function init() {
   try {
@@ -45,7 +195,9 @@ async function init() {
     const stats = (await db.query(
       "SELECT COUNT(*) n, MIN(date) lo, MAX(date) hi FROM episodes"
     ))[0];
-    els.stat.textContent = `${stats.n.toLocaleString()} episodes, ${String(stats.lo).slice(0, 4)}–${String(stats.hi).slice(0, 4)}.`;
+    const days = Math.round((Date.parse(stats.hi) - Date.parse(stats.lo)) / 86400000);
+    els.stat.textContent =
+      `${stats.n.toLocaleString()} EPISODES · ${days.toLocaleString()} DAYS ON AIR · ${String(stats.lo).slice(0, 4)}–${String(stats.hi).slice(0, 4)}`;
 
     // populate year filter from data
     const years = await db.query(
@@ -58,9 +210,14 @@ async function init() {
       opt.textContent = y;
       els.year.appendChild(opt);
     }
+
+    // Load every episode's date for the spectrum, then draw the idle archive.
+    Spectrum.init(els.canvas);
+    const epRows = await db.query("SELECT episode, substr(date,1,10) d FROM episodes WHERE date IS NOT NULL");
+    Spectrum.setEpisodes(epRows);
   } catch (e) {
-    els.stat.textContent = "could not load the archive.";
-    els.results.innerHTML = `<p class="empty">Failed to load the search index: ${escapeHtml(e.message)}<br>The database file must be served with HTTP range-request support.</p>`;
+    els.stat.textContent = "COULD NOT LOAD THE ARCHIVE";
+    els.results.innerHTML = `<p class="empty">Can't read the archive: ${escapeHtml(e.message)}<br>The database loads over HTTP byte-range requests — the host needs to allow them.</p>`;
     console.error(e);
   }
 }
@@ -88,11 +245,11 @@ async function search(rawQuery, year) {
   const match = ftsQuery(rawQuery);
   if (!match) {
     els.summary.hidden = true;
-    els.aiPanel.hidden = true;
     els.results.innerHTML = "";
+    Spectrum.render(null); // back to the idle archive
     return;
   }
-  els.results.innerHTML = `<p class="loading">Searching…</p>`;
+  els.results.innerHTML = `<p class="loading">Reading the record…</p>`;
 
   const yearClause = year ? " AND e.date LIKE :yr" : "";
   const params = { ":m": match };
@@ -120,11 +277,16 @@ async function search(rawQuery, year) {
   );
   const total = byYear.reduce((a, r) => a + r.n, 0);
 
+  // Every matching episode (not just the top 50) lights up the spectrum.
+  const all = await db.query(
+    "SELECT episode FROM episodes_fts WHERE episodes_fts MATCH :m",
+    { ":m": match }
+  );
+  Spectrum.render(new Set(all.map((r) => r.episode)), year);
+
   renderSummary(rawQuery, total, byYear, year);
   renderResults(rows, year);
-
   lastResults = rows.slice(0, 12);
-  els.aiPanel.hidden = rows.length === 0;
 }
 
 function renderSummary(query, total, byYear, activeYear) {
@@ -139,12 +301,13 @@ function renderSummary(query, total, byYear, activeYear) {
         `<button class="year-bar${activeYear === r.yr ? " active" : ""}" data-year="${r.yr}">${r.yr} <b>${r.n}</b></button>`
     )
     .join("");
+  const q = escapeHtml(query);
   let headline;
   if (activeYear) {
     const yearN = byYear.find((r) => r.yr === activeYear)?.n || 0;
-    headline = `“<strong>${escapeHtml(query)}</strong>” appears in <strong>${yearN}</strong> episode${yearN === 1 ? "" : "s"} in <strong>${activeYear}</strong> <span style="color:var(--muted)">(${total} across all years)</span>.`;
+    headline = `<strong>${q}</strong> — in <span class="count">${yearN}</span> episode${yearN === 1 ? "" : "s"} in ${activeYear} <span class="muted">(${total} across all years)</span>`;
   } else {
-    headline = `“<strong>${escapeHtml(query)}</strong>” appears in <strong>${total}</strong> episode${total === 1 ? "" : "s"} <span style="color:var(--muted)">— pick a year to narrow down</span>.`;
+    headline = `<strong>${q}</strong> — in <span class="count">${total}</span> episode${total === 1 ? "" : "s"}, ${byYear[byYear.length - 1].yr}–${byYear[0].yr} <span class="muted">· tap a year to narrow</span>`;
   }
   els.summary.innerHTML = `<div class="big">${headline}</div><div class="year-bars">${yearBars}</div>`;
   els.summary.hidden = false;
@@ -159,23 +322,35 @@ function renderSummary(query, total, byYear, activeYear) {
 
 function renderResults(rows, year) {
   if (!rows.length) {
-    els.results.innerHTML = `<p class="empty">No episodes matched${year ? " in " + year : ""}. Try fewer or different terms.</p>`;
+    els.results.innerHTML = `<p class="empty">Nothing in the record${year ? " for " + year : ""}. Try fewer or different terms.</p>`;
     return;
   }
-  els.results.innerHTML = rows
-    .map((r) => {
-      const date = r.date ? String(r.date).slice(0, 10) : "";
-      const links = [
-        r.url ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">transcript</a>` : "",
-        r.audio ? `<a href="${escapeHtml(r.audio)}" target="_blank" rel="noopener">audio</a>` : "",
-      ].filter(Boolean).join(" · ");
-      return `<article class="result">
-        <h3><a href="${escapeHtml(r.url || "#")}" target="_blank" rel="noopener">Episode ${r.episode}${r.theme ? ` — <span style="color:var(--muted);font-weight:400">${escapeHtml(r.theme)}</span>` : ""}</a></h3>
-        <div class="meta">${date}${links ? " · " + links : ""}</div>
-        <div class="snippet">${r.snippet || ""}</div>
-      </article>`;
-    })
-    .join("");
+  els.results.innerHTML =
+    `<p class="results-lead">Top matches</p>` +
+    rows
+      .map((r) => {
+        const date = r.date ? String(r.date).slice(0, 10) : "";
+        const links = [
+          r.url ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">transcript</a>` : "",
+          r.audio ? `<a href="${escapeHtml(r.audio)}" target="_blank" rel="noopener">audio</a>` : "",
+        ].filter(Boolean).join(" · ");
+        const theme = r.theme ? ` <span class="theme">— ${escapeHtml(r.theme)}</span>` : "";
+        return `<article class="result" data-date="${date}">
+          <div class="id">EP ${String(r.episode).padStart(4, "0")}</div>
+          <h3><a href="${escapeHtml(r.url || "#")}" target="_blank" rel="noopener">Episode ${r.episode}${theme}</a></h3>
+          <div class="meta">${date}${links ? " · " + links : ""}</div>
+          <div class="snippet">${r.snippet || ""}</div>
+        </article>`;
+      })
+      .join("");
+  // Tint each result's edge by its redshift color (set via CSSOM — CSP-safe).
+  els.results.querySelectorAll(".result").forEach((el) => {
+    const t = Date.parse(el.dataset.date);
+    if (Number.isNaN(t) || !Spectrum.eps.length) return;
+    const p = (t - Spectrum.min) / (Spectrum.max - Spectrum.min || 1);
+    const [r, g, b] = Spectrum.color(p);
+    el.style.setProperty("--rs", `rgb(${r},${g},${b})`);
+  });
 }
 
 function runSearch() {
@@ -378,19 +553,28 @@ async function runSemantic() {
 
   semStatus("");
   els.summary.hidden = true;
-  els.aiPanel.hidden = true;
+  Spectrum.render(new Set(scored.map((r) => r.episode))); // light up the matches
   els.results.innerHTML =
-    `<p class="loading" style="opacity:.7">Episodes most related to “${escapeHtml(query)}”, by meaning:</p>` +
+    `<p class="results-lead">Closest by meaning — “${escapeHtml(query)}”</p>` +
     scored
       .map((r) => {
         const date = r.date ? String(r.date).slice(0, 10) : "";
         const url = `https://www.sgutranscripts.org/wiki/SGU_Episode_${r.episode}`;
-        return `<article class="result">
-          <h3><a href="${url}" target="_blank" rel="noopener">Episode ${r.episode}${r.theme ? ` — <span style="color:var(--muted);font-weight:400">${escapeHtml(r.theme)}</span>` : ""}</a></h3>
-          <div class="meta">${date} · relevance ${(r.score * 100).toFixed(0)}%</div>
+        const theme = r.theme ? ` <span class="theme">— ${escapeHtml(r.theme)}</span>` : "";
+        return `<article class="result" data-date="${date}">
+          <div class="id">EP ${String(r.episode).padStart(4, "0")} · ${(r.score * 100).toFixed(0)}% match</div>
+          <h3><a href="${url}" target="_blank" rel="noopener">Episode ${r.episode}${theme}</a></h3>
+          <div class="meta">${date}</div>
         </article>`;
       })
       .join("");
+  els.results.querySelectorAll(".result").forEach((el) => {
+    const t = Date.parse(el.dataset.date);
+    if (Number.isNaN(t) || !Spectrum.eps.length) return;
+    const p = (t - Spectrum.min) / (Spectrum.max - Spectrum.min || 1);
+    const [r, g, b] = Spectrum.color(p);
+    el.style.setProperty("--rs", `rgb(${r},${g},${b})`);
+  });
 }
 
 function stripTags(s) {
