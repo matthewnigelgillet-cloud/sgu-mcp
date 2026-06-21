@@ -8,9 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "fetch-db": "node scripts/fetch-db.mjs",
-    "chunk": "node scripts/chunk-db.mjs",
-    "build:cf": "node scripts/fetch-db.mjs && node scripts/chunk-db.mjs && vite build"
+    "build:cf": "vite build"
   },
   "dependencies": {
     "react": "^18.3.1",

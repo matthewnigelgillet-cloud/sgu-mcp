@@ -11,10 +11,12 @@ export function initArchive() {
   _ready = (async () => {
     const createDbWorker = window.createDbWorker;
     if (!createDbWorker) throw new Error("search engine failed to load (vendor/index.js missing)");
-    // Chunked mode: the DB is split into <25 MiB parts (public/db/) so it can be
-    // hosted as static assets on Cloudflare Pages. Still range-fetched per query.
+    // The DB is served at /db by a Cloudflare Pages Function that proxies range
+    // requests to the GitHub release asset (Pages doesn't reliably honour Range
+    // on static files). Larger requestChunkSize = fewer round trips through the
+    // proxy. Locally, run `wrangler pages dev` so the Function is available.
     const worker = await createDbWorker(
-      [{ from: "jsonconfig", configUrl: "/db/config.json" }],
+      [{ from: "inline", config: { serverMode: "full", url: "/db", requestChunkSize: 1048576 } }],
       "/vendor/sqlite.worker.js",
       "/vendor/sql-wasm.wasm"
     );
