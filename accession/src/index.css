@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-ink text-bone font-sans antialiased;
+    /* matte observatory ground: a deep vignette + faint plate grain, no neon glow */
+    background-image:
+      radial-gradient(120% 90% at 50% -10%, #10141d 0%, rgba(12, 15, 22, 0) 60%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+    background-attachment: fixed;
+  }
+  /* tabular figures everywhere numbers live */
+  .font-mono {
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+  ::selection {
+    background: rgba(95, 182, 166, 0.25);
+    color: #e9e3d5;
+  }
+  :focus-visible {
+    outline: 1.5px solid #5fb6a6;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* a hairline that draws in from the left when revealed */
+  .rule-brass {
+    @apply h-px origin-left bg-brass/70;
+  }
+  /* in-view reveal: opacity + slight rise, eased; toggled by the .is-in class */
+  .reveal {
+    opacity: 0;
+    transform: translateY(10px);
+    transition:
+      opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1),
+      transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  .reveal.is-in {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
