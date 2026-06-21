@@ -11,16 +11,15 @@ export function initArchive() {
   _ready = (async () => {
     const createDbWorker = window.createDbWorker;
     if (!createDbWorker) throw new Error("search engine failed to load (vendor/index.js missing)");
-    // The DB is fetched in full mode with HTTP range requests. Set VITE_DB_URL
-    // (in Cloudflare Pages env vars) to a fast, range-capable, CORS-enabled host
-    // — e.g. the Render static site that serves /sgu.db. If unset, it falls back
-    // to the same-origin /db Pages Function (which proxies the GitHub release —
-    // correct but slow), so always set VITE_DB_URL in production.
-    const dbUrl = import.meta.env.VITE_DB_URL || "/db";
+    // The DB is served same-origin at /sgu.db by the Render static site, which
+    // honours HTTP range requests — only the DB pages each query touches are
+    // fetched. VITE_DB_URL can point it at a different host if ever needed.
+    const origin = location.origin;
+    const dbUrl = new URL(import.meta.env.VITE_DB_URL || "/sgu.db", origin).href;
     const worker = await createDbWorker(
-      [{ from: "inline", config: { serverMode: "full", url: dbUrl, requestChunkSize: 262144 } }],
-      "/vendor/sqlite.worker.js",
-      "/vendor/sql-wasm.wasm"
+      [{ from: "inline", config: { serverMode: "full", url: dbUrl, requestChunkSize: 4096 } }],
+      new URL("/vendor/sqlite.worker.js", origin).href,
+      new URL("/vendor/sql-wasm.wasm", origin).href
     );
     _db = worker.db;
     return _db;
@@ -60,8 +59,8 @@ export async function searchEpisodes(raw, { year, limit = 40 } = {}) {
             bm25(episodes_fts, 0.0, 8.0, 4.0, 1.0) AS score
      FROM episodes_fts f JOIN episodes e ON e.episode = f.episode
      WHERE episodes_fts MATCH :m${yearClause}
-     ORDER BY score LIMIT :lim`,
-    { ...params, ":lim": limit }
+     ORDER BY score LIMIT ${Number(limit) || 40}`,
+    params
   );
 
   const byYear = await db.query(

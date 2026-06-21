@@ -10,11 +10,16 @@ services:
   - type: web
     name: sgu-archive
     runtime: static
-    buildCommand: npm ci && npm run setup && npm run web
-    staticPublishPath: ./web
+    # Build the ACCESSION app and bundle the 75 MB DB next to it, so the app and
+    # the database are served same-origin from ONE Render static site — no
+    # Cloudflare, no CORS, no proxy. Render honours range requests on /sgu.db.
+    buildCommand: npm ci && npm run setup && npm run web && cd accession && npm ci && npm run build && cp ../web/sgu.db dist/sgu.db
+    staticPublishPath: ./accession/dist
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: VITE_DB_URL
+        value: /sgu.db
     headers:
       - path: /sgu.db
         name: Accept-Ranges
@@ -22,12 +27,6 @@ services:
       - path: /sgu.db
         name: Cache-Control
         value: public, max-age=86400
-      # CORS: allow the ACCESSION site (on Cloudflare Pages) to fetch this DB
-      # cross-origin with range requests. Render honours Range; this lets the
-      # browser read the response.
-      - path: /sgu.db
-        name: Access-Control-Allow-Origin
-        value: "*"
       # Security headers for the HTML/app. The CSP mirrors the <meta> in
       # index.html; sending it as a real header is stronger (covers responses
       # the meta tag can't, and can't be stripped by injected markup).

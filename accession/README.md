@@ -11,31 +11,26 @@ npm run build    # production bundle -> dist/
 npm run preview
 ```
 
-## The search database (chunked)
+## The search database
 
 Search and the reference desk both run off `sgu.db` (~75 MB) in the browser via
-`sql.js-httpvfs`. Cloudflare Pages caps any single file at 25 MiB, so the DB is **split
-into <25 MiB parts** under `public/db/` (served as static assets, still range-fetched per
-query). `npm run chunk` produces them from a local `../web/sgu.db`; `npm run fetch-db`
-downloads the prebuilt DB from the `db-latest` GitHub release first (for CI). Both `public/db/`
-and `.dbsrc/` are gitignored.
+`sql.js-httpvfs`, which fetches only the DB pages each query touches over HTTP **range
+requests**. The DB is served **same-origin at `/sgu.db`**, so the host must honour range
+requests (Render does; Cloudflare Pages does not, reliably). `VITE_DB_URL` can point the
+app at a different host if needed.
 
-## Deploy to Cloudflare Pages (free)
+## Deploy to Render (free, no Cloudflare)
 
-Prerequisite: the `db-latest` release must exist — run the **"Publish prebuilt index"**
-GitHub Action once so the build can download `sgu.db`.
+One Render **static site** serves both the app and the DB, same-origin — no second service,
+no CORS. Prerequisite: run the **"Publish prebuilt index"** GitHub Action once so the build
+can download `sgu.db`.
 
-Then create a Pages project from the GitHub repo with:
+Then: Render → **New → Blueprint** → connect the repo. `render.yaml` defines the `sgu-archive`
+static site, which builds the ACCESSION app, downloads + strips the index, and bundles it at
+`/sgu.db`. (A second optional `sgu-mcp-connector` service appears — skip/suspend it; only the
+static site is needed.)
 
-| Setting | Value |
-|---|---|
-| Root directory | `accession` |
-| Build command | `npm run build:cf` |
-| Build output directory | `dist` |
-| Environment variable | `NODE_VERSION` = `20` |
-
-`build:cf` downloads the prebuilt DB, splits it into parts, then `vite build`. The BYOK
-reference desk calls Anthropic directly from the browser, so no server is needed.
+The BYOK reference desk calls Anthropic directly from the browser, so no server is needed.
 
 ## What it is
 
