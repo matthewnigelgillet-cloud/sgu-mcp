@@ -71,14 +71,25 @@ const Spectrum = {
     canvas.addEventListener("pointerleave", () => (els.tip.style.opacity = 0));
     canvas.addEventListener("pointerdown", (e) => this.click(e));
   },
+  pads: { l: 16, r: 16, t: 18, b: 12 },
   setEpisodes(rows) {
     this.eps = rows
-      .map((r) => ({ episode: r.episode, t: Date.parse(r.d), year: String(r.d).slice(0, 4) }))
+      .map((r) => ({ episode: r.episode, t: Date.parse(r.d), year: Number(String(r.d).slice(0, 4)) }))
       .filter((e) => !Number.isNaN(e.t));
-    this.min = Math.min(...this.eps.map((e) => e.t));
-    this.max = Math.max(...this.eps.map((e) => e.t));
+    const y0 = Math.min(...this.eps.map((e) => e.year));
+    const y1 = Math.max(...this.eps.map((e) => e.year));
+    this.years = [];
+    for (let y = y0; y <= y1; y++) this.years.push(y);
+    this.count = {};
+    this.years.forEach((y) => (this.count[y] = 0));
+    for (const e of this.eps) this.count[e.year]++;
+    let cum = 0;
+    this.cum = {};
+    for (const y of this.years) this.cum[y] = (cum += this.count[y]);
+    this.total = cum;
     this.renderAxis();
     this.resize();
+    this.startScan();
   },
   // Map a 0..1 position (0 = oldest) to a visible wavelength, then to RGB.
   // 0 -> 645nm (red), 1 -> 415nm (violet): the redshift gradient.
@@ -93,9 +104,21 @@ const Spectrum = {
     else { r = 1; }
     return [Math.round(255 * r), Math.round(255 * g), Math.round(255 * b)];
   },
-  x(t) {
+  xYear(y) {
     const W = this.canvas.clientWidth;
-    return this.pad + ((t - this.min) / (this.max - this.min || 1)) * (W - 2 * this.pad);
+    const { l, r } = this.pads;
+    const n = this.years.length;
+    const i = this.years.indexOf(y);
+    return l + (n === 1 ? 0.5 : i / (n - 1)) * (W - l - r);
+  },
+  grad() {
+    const { l, r } = this.pads;
+    const g = this.ctx.createLinearGradient(l, 0, this.canvas.clientWidth - r, 0);
+    for (let s = 0; s <= 8; s++) {
+      const [R, G, B] = this.color(s / 8);
+      g.addColorStop(s / 8, `rgb(${R},${G},${B})`);
+    }
+    return g;
   },
   resize() {
     if (!this.canvas) return;
@@ -111,75 +134,144 @@ const Spectrum = {
     this.activeYear = activeYear || "";
     this.draw();
   },
+  startScan() {
+    if (this.reduce || this._raf) return;
+    const loop = (ts) => {
+      if (!this._t0) this._t0 = ts;
+      this.scanP = ((ts - this._t0) / 7000) % 1;
+      if (!this.matched) this.draw(); // sweep only on the idle archive
+      this._raf = requestAnimationFrame(loop);
+    };
+    this._raf = requestAnimationFrame(loop);
+  },
   draw() {
     const ctx = this.ctx;
-    if (!ctx || !this.eps.length) return;
+    if (!ctx || !this.years) return;
     const W = this.canvas.clientWidth, H = this.canvas.clientHeight;
+    const { l, r, t, b } = this.pads;
+    const baseY = H - b, plotH = H - t - b, x0 = l, x1 = W - r;
     ctx.clearRect(0, 0, W, H);
-    const baseY = H - 2;
-    const span = this.max - this.min || 1;
 
-    for (const e of this.eps) {
-      const p = (e.t - this.min) / span;
-      const [r, g, b] = this.color(p);
-      const x = this.x(e.t);
-      const hit = this.matched ? this.matched.has(e.episode) : null;
-      const dimYear = this.activeYear && e.year !== this.activeYear;
-      let alpha, h;
-      if (this.matched) {
-        alpha = hit ? (dimYear ? 0.5 : 1) : 0.06;
-        h = hit ? H - 8 : 9;
-      } else {
-        alpha = 0.22;
-        h = 12;
-      }
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = `rgb(${r},${g},${b})`;
-      ctx.lineWidth = this.matched && hit ? 1.6 : 1;
-      if (this.matched && hit) {
-        ctx.shadowColor = `rgb(${r},${g},${b})`;
-        ctx.shadowBlur = 6;
-      } else {
-        ctx.shadowBlur = 0;
-      }
-      ctx.beginPath();
-      ctx.moveTo(x, baseY);
-      ctx.lineTo(x, baseY - h);
-      ctx.stroke();
+    // --- graticule: scope screen grid ---
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(65,224,255,0.06)";
+    for (let k = 0; k <= 4; k++) {
+      const y = t + (k / 4) * plotH;
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
     }
-    ctx.globalAlpha = 1;
+    for (const y of this._axisYears || []) {
+      const x = this.xYear(y);
+      ctx.beginPath(); ctx.moveTo(x, t); ctx.lineTo(x, baseY); ctx.stroke();
+    }
+
+    // --- signal: idle = cumulative growth; search = matches per year ---
+    const matched = this.matched;
+    const val = {};
+    let maxV = 1;
+    if (matched) {
+      this.years.forEach((y) => (val[y] = 0));
+      for (const e of this.eps) if (matched.has(e.episode)) val[e.year]++;
+      maxV = Math.max(1, ...Object.values(val));
+    } else {
+      this.years.forEach((y) => (val[y] = this.cum[y] / this.total));
+    }
+    this._series = { val, maxV, matched: !!matched };
+    const grad = this.grad();
+    const pts = this.years.map((y) => ({ x: this.xYear(y), h: (matched ? val[y] / maxV : val[y]) * plotH }));
+
+    // filled envelope
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, baseY);
+    for (const p of pts) ctx.lineTo(p.x, baseY - p.h);
+    ctx.lineTo(pts[pts.length - 1].x, baseY);
+    ctx.closePath();
+    ctx.globalAlpha = matched ? 0.42 : 0.14;
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // glowing top edge
+    ctx.globalAlpha = matched ? 1 : 0.75;
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p.x, baseY - p.h) : ctx.moveTo(p.x, baseY - p.h)));
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = matched ? 2 : 1.4;
+    ctx.shadowColor = "rgba(65,224,255,0.45)";
+    ctx.shadowBlur = matched ? 12 : 7;
+    ctx.stroke();
     ctx.shadowBlur = 0;
+
+    // vivid spectral baseline ruler — the emission band
+    ctx.globalAlpha = matched ? 0.4 : 0.85;
+    ctx.fillStyle = grad;
+    ctx.fillRect(x0, baseY - 1, x1 - x0, 2.5);
+
+    // on a search, plant a glowing node on each matching year
+    if (matched) {
+      ctx.globalAlpha = 1;
+      for (const p of pts) {
+        if (p.h < 0.5) continue;
+        const [R, G, B] = this.color((p.x - x0) / (x1 - x0));
+        ctx.fillStyle = `rgb(${R},${G},${B})`;
+        ctx.shadowColor = `rgb(${R},${G},${B})`;
+        ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.arc(p.x, baseY - p.h, 2.2, 0, 7); ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+    }
+
+    // idle scan playhead
+    if (!matched && !this.reduce && this.scanP != null) {
+      const sx = x0 + this.scanP * (x1 - x0);
+      ctx.globalAlpha = 0.6;
+      ctx.strokeStyle = "rgba(120,230,255,0.9)";
+      ctx.shadowColor = "rgba(120,230,255,0.9)";
+      ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.moveTo(sx, t); ctx.lineTo(sx, baseY); ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+
+    // corner brackets — instrument frame
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = "rgba(65,224,255,0.55)";
+    ctx.lineWidth = 1.5;
+    const c = 10;
+    const corner = (cx, cy, dx, dy) => {
+      ctx.beginPath();
+      ctx.moveTo(cx + dx * c, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy * c);
+      ctx.stroke();
+    };
+    corner(x0, t, 1, 1); corner(x1, t, -1, 1); corner(x0, baseY, 1, -1); corner(x1, baseY, -1, -1);
+    ctx.globalAlpha = 1;
   },
   renderAxis() {
-    const years = [...new Set(this.eps.map((e) => e.year))].sort();
-    if (!years.length) return;
-    const step = Math.ceil(years.length / 8);
-    const ticks = years.filter((_, i) => i % step === 0);
-    els.axis.innerHTML = ticks.map((y) => `<span>${y}</span>`).join("");
+    const step = Math.ceil(this.years.length / 8);
+    this._axisYears = this.years.filter((_, i) => i % step === 0);
+    els.axis.innerHTML = this._axisYears.map((y) => `<span>${y}</span>`).join("");
   },
-  nearest(clientX) {
-    const rect = this.canvas.getBoundingClientRect();
-    const mx = clientX - rect.left;
+  nearestYear(clientX) {
+    const mx = clientX - this.canvas.getBoundingClientRect().left;
     let best = null, bd = 1e9;
-    for (const e of this.eps) {
-      const d = Math.abs(this.x(e.t) - mx);
-      if (d < bd) { bd = d; best = e; }
+    for (const y of this.years) {
+      const d = Math.abs(this.xYear(y) - mx);
+      if (d < bd) { bd = d; best = y; }
     }
-    return bd < 8 ? best : null;
+    return best;
   },
   hover(e) {
-    const ep = this.nearest(e.clientX);
-    if (!ep) { els.tip.style.opacity = 0; return; }
-    const rect = this.canvas.getBoundingClientRect();
-    els.tip.textContent = `EP ${ep.episode} · ${new Date(ep.t).toISOString().slice(0, 10)}`;
-    els.tip.style.left = `${this.x(ep.t)}px`;
-    els.tip.style.top = `${e.clientY - rect.top}px`;
+    const y = this.nearestYear(e.clientX);
+    if (y == null || !this._series) { els.tip.style.opacity = 0; return; }
+    const s = this._series;
+    const n = s.matched ? s.val[y] : this.count[y];
+    const label = s.matched ? `${n} match${n === 1 ? "" : "es"}` : `${n} episode${n === 1 ? "" : "s"}`;
+    els.tip.textContent = `${y} · ${label}`;
+    els.tip.style.left = `${this.xYear(y)}px`;
+    els.tip.style.top = `${e.clientY - this.canvas.getBoundingClientRect().top}px`;
     els.tip.style.opacity = 1;
   },
   click(e) {
-    const ep = this.nearest(e.clientX);
-    if (!ep) return;
-    els.year.value = els.year.value === ep.year ? "" : ep.year;
+    const y = this.nearestYear(e.clientX);
+    if (y == null) return;
+    els.year.value = els.year.value === String(y) ? "" : String(y);
     runSearch();
   },
 };
@@ -215,6 +307,7 @@ async function init() {
     Spectrum.init(els.canvas);
     const epRows = await db.query("SELECT episode, substr(date,1,10) d FROM episodes WHERE date IS NOT NULL");
     Spectrum.setEpisodes(epRows);
+    renderEmptyState();
   } catch (e) {
     els.stat.textContent = "COULD NOT LOAD THE ARCHIVE";
     els.results.innerHTML = `<p class="empty">Can't read the archive: ${escapeHtml(e.message)}<br>The database loads over HTTP byte-range requests — the host needs to allow them.</p>`;
@@ -245,7 +338,7 @@ async function search(rawQuery, year) {
   const match = ftsQuery(rawQuery);
   if (!match) {
     els.summary.hidden = true;
-    els.results.innerHTML = "";
+    renderEmptyState();
     Spectrum.render(null); // back to the idle archive
     return;
   }
@@ -351,6 +444,24 @@ function renderResults(rows, year) {
     const [r, g, b] = Spectrum.color(p);
     el.style.setProperty("--rs", `rgb(${r},${g},${b})`);
   });
+}
+
+const EXAMPLES = ["homeopathy", "CRISPR", "Bigfoot", "cold fusion", "de-extinction", "free will", "UFOs", "quantum"];
+function renderEmptyState() {
+  els.results.innerHTML =
+    `<div class="empty-state">
+       <p class="empty-lead">An empty field. Ask it a topic, a name, or a claim.</p>
+       <div class="chips">${EXAMPLES.map((q) => `<button class="chip" data-q="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}</div>
+     </div>`;
+  els.results.querySelectorAll(".chip").forEach((c) =>
+    c.addEventListener("click", () => {
+      // make sure the keyword tab is active, then run the example
+      document.getElementById("tab-search").click();
+      els.q.value = c.dataset.q;
+      runSearch();
+      els.q.focus();
+    })
+  );
 }
 
 function runSearch() {
