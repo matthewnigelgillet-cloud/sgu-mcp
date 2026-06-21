@@ -11,12 +11,14 @@ export function initArchive() {
   _ready = (async () => {
     const createDbWorker = window.createDbWorker;
     if (!createDbWorker) throw new Error("search engine failed to load (vendor/index.js missing)");
-    // The DB is served at /db by a Cloudflare Pages Function that proxies range
-    // requests to the GitHub release asset (Pages doesn't reliably honour Range
-    // on static files). Larger requestChunkSize = fewer round trips through the
-    // proxy. Locally, run `wrangler pages dev` so the Function is available.
+    // The DB is fetched in full mode with HTTP range requests. Set VITE_DB_URL
+    // (in Cloudflare Pages env vars) to a fast, range-capable, CORS-enabled host
+    // — e.g. the Render static site that serves /sgu.db. If unset, it falls back
+    // to the same-origin /db Pages Function (which proxies the GitHub release —
+    // correct but slow), so always set VITE_DB_URL in production.
+    const dbUrl = import.meta.env.VITE_DB_URL || "/db";
     const worker = await createDbWorker(
-      [{ from: "inline", config: { serverMode: "full", url: "/db", requestChunkSize: 1048576 } }],
+      [{ from: "inline", config: { serverMode: "full", url: dbUrl, requestChunkSize: 262144 } }],
       "/vendor/sqlite.worker.js",
       "/vendor/sql-wasm.wasm"
     );
