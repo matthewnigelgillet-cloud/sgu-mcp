@@ -3,8 +3,9 @@ dist/
 *.log
 .DS_Store
 
-# large/reproducible data assets
+# large/reproducible data assets (DB is downloaded + chunked at build time)
 public/sgu.db
-public/vendor/
 public/db/
 .dbsrc/
+# NOTE: public/vendor/ IS committed — sql.js-httpvfs worker/wasm aren't an npm
+# dep here and the build can't regenerate them, so they must live in the repo.
