@@ -5,10 +5,37 @@ A premium, editorial **scientific-archive** homepage for the SGU Archive, built 
 
 ```bash
 npm install
+npm run chunk    # split ../web/sgu.db into public/db/ parts (needed for search)
 npm run dev      # http://localhost:5173
 npm run build    # production bundle -> dist/
 npm run preview
 ```
+
+## The search database (chunked)
+
+Search and the reference desk both run off `sgu.db` (~75 MB) in the browser via
+`sql.js-httpvfs`. Cloudflare Pages caps any single file at 25 MiB, so the DB is **split
+into <25 MiB parts** under `public/db/` (served as static assets, still range-fetched per
+query). `npm run chunk` produces them from a local `../web/sgu.db`; `npm run fetch-db`
+downloads the prebuilt DB from the `db-latest` GitHub release first (for CI). Both `public/db/`
+and `.dbsrc/` are gitignored.
+
+## Deploy to Cloudflare Pages (free)
+
+Prerequisite: the `db-latest` release must exist — run the **"Publish prebuilt index"**
+GitHub Action once so the build can download `sgu.db`.
+
+Then create a Pages project from the GitHub repo with:
+
+| Setting | Value |
+|---|---|
+| Root directory | `accession` |
+| Build command | `npm run build:cf` |
+| Build output directory | `dist` |
+| Environment variable | `NODE_VERSION` = `20` |
+
+`build:cf` downloads the prebuilt DB, splits it into parts, then `vite build`. The BYOK
+reference desk calls Anthropic directly from the browser, so no server is needed.
 
 ## What it is
 

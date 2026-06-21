@@ -7,22 +7,37 @@ import { searchEpisodes } from "../archive";
 
 const BEGINNINGS = ["homeopathy", "cancer", "artificial intelligence", "Bigfoot", "cold fusion"];
 
-function PathTab({ active, onClick, children, note }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex-1 border-b-2 pb-3 text-left transition-colors ${
-        active ? "border-verdigris" : "border-transparent hover:border-rule"
+function PathTab({ active, onClick, children, note, href }) {
+  const base = `group flex-1 border-b-2 pb-3 text-left transition-colors ${
+    active ? "border-verdigris" : "border-transparent hover:border-rule"
+  }`;
+  const title = (
+    <span
+      className={`block font-serif text-[1.15rem] transition-colors ${
+        active ? "text-bone" : "text-graphite group-hover:text-bone"
       }`}
     >
-      <span
-        className={`block font-serif text-[1.15rem] ${active ? "text-bone" : "text-graphite"}`}
-      >
-        {children}
-      </span>
-      <span className="mt-0.5 block font-mono text-[0.62rem] uppercase tracking-label text-graphite">
-        {note}
-      </span>
+      {children}
+      {href && <span className="ml-1 text-verdigris">↗</span>}
+    </span>
+  );
+  const sub = (
+    <span className="mt-0.5 block font-mono text-[0.62rem] uppercase tracking-label text-graphite">
+      {note}
+    </span>
+  );
+  if (href) {
+    return (
+      <a href={href} target="_blank" rel="noopener" className={base}>
+        {title}
+        {sub}
+      </a>
+    );
+  }
+  return (
+    <button onClick={onClick} className={base}>
+      {title}
+      {sub}
     </button>
   );
 }
@@ -145,12 +160,18 @@ export default function FindingAid() {
   return (
     <Section id="finding-aid" numeral="Ⅲ" kicker="Consult the finding aid">
       {/* two paths, the visitor's choice */}
-      <div className="mb-8 flex gap-6">
+      <div className="mb-8 flex flex-wrap gap-x-6 gap-y-4">
         <PathTab active={path === "free"} onClick={() => setPath("free")} note="Free · no key">
           Search the record
         </PathTab>
         <PathTab active={path === "claude"} onClick={() => setPath("claude")} note="Bring your Claude key">
           Ask the reference desk
+        </PathTab>
+        <PathTab
+          href="https://github.com/matthewnigelgillet-cloud/sgu-mcp"
+          note="Run it in Claude · GitHub"
+        >
+          Get the SGU MCP
         </PathTab>
       </div>
 

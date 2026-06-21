@@ -6,3 +6,5 @@ dist/
 # large/reproducible data assets
 public/sgu.db
 public/vendor/
+public/db/
+.dbsrc/
