@@ -28,7 +28,7 @@ function PathTab({ active, onClick, children, note, href }) {
   );
   if (href) {
     return (
-      <a href={href} target="_blank" rel="noopener" className={base}>
+      <a href={href} target="_blank" rel="noopener noreferrer" className={base}>
         {title}
         {sub}
       </a>

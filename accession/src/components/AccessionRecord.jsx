@@ -1,5 +1,17 @@
 import { Reveal } from "./ui";
 
+// Only allow http(s) links — neutralises any javascript:/data: URL that could
+// slip in from scraped DB content and run script on click.
+function safeHref(u) {
+  if (!u) return null;
+  try {
+    const p = new URL(u, window.location.origin);
+    return p.protocol === "http:" || p.protocol === "https:" ? p.href : null;
+  } catch {
+    return null;
+  }
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmtDate(iso) {
   if (!iso) return "";
@@ -64,13 +76,13 @@ export default function AccessionRecord({ record, index = 0 }) {
       </p>
 
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[0.66rem] uppercase tracking-label">
-        {r.url && (
-          <a href={r.url} target="_blank" rel="noopener" className="text-graphite underline-offset-4 hover:text-verdigris hover:underline">
+        {safeHref(r.url) && (
+          <a href={safeHref(r.url)} target="_blank" rel="noopener noreferrer" className="text-graphite underline-offset-4 hover:text-verdigris hover:underline">
             Transcript
           </a>
         )}
-        {r.audio && (
-          <a href={r.audio} target="_blank" rel="noopener" className="text-graphite underline-offset-4 hover:text-verdigris hover:underline">
+        {safeHref(r.audio) && (
+          <a href={safeHref(r.audio)} target="_blank" rel="noopener noreferrer" className="text-graphite underline-offset-4 hover:text-verdigris hover:underline">
             Audio
           </a>
         )}

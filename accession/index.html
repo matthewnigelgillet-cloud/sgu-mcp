@@ -3,6 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Content-Security-Policy (defense-in-depth; the host also sends it as a
+         header). Scripts/wasm same-origin only; the only network egress allowed
+         is the visitor's own browser -> api.anthropic.com (BYOK), so even an
+         injected script can't send the API key anywhere else. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; child-src 'self' blob:; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.anthropic.com; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
     <title>SGU Archive — the complete transcript record</title>
     <meta
       name="description"
